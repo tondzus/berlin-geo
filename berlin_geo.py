@@ -23,14 +23,11 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 
-PBF_URL = 'http://download.geofabrik.de/europe/germany/brandenburg-latest.osm.pbf'
+PBF_URL = 'http://download.geofabrik.de/europe/germany/' \
+          'brandenburg-latest.osm.pbf'
 BERLIN_BOUNDS = (52.4510, 13.2691, 52.5801, 13.5321)
 CLIPSIZE = itemgetter(1, 3)(BERLIN_BOUNDS), itemgetter(0, 2)(BERLIN_BOUNDS)
 LON_LAT_BOX = itemgetter(1, 3, 0, 2)(BERLIN_BOUNDS)
-#CLIPSIZE = ((BERLIN_BOUNDS[1], BERLIN_BOUNDS[3]),
-#            (BERLIN_BOUNDS[0], BERLIN_BOUNDS[2]))
-#LON_LAT_BOX = (BERLIN_BOUNDS[1], BERLIN_BOUNDS[3],
-#               BERLIN_BOUNDS[0], BERLIN_BOUNDS[2])
 LOCAL_CACHE_PATH = 'brandenburg-latest.osm'
 DATASET_PATH = 'restaurants.csv'
 
