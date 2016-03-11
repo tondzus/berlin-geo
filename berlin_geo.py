@@ -31,8 +31,7 @@ PBF_URL = 'http://download.geofabrik.de/europe/germany/' \
 BERLIN_BOUNDS = (52.4510, 13.2691, 52.5801, 13.5321)
 CLIPSIZE = itemgetter(1, 3)(BERLIN_BOUNDS), itemgetter(0, 2)(BERLIN_BOUNDS)
 LON_LAT_BOX = itemgetter(1, 3, 0, 2)(BERLIN_BOUNDS)
-LOCAL_CACHE_PATH = 'brandenburg-latest.osm'
-DATASET_PATH = 'restaurants.csv'
+DATASET_PATH = 'node_data.csv'
 BERLIN_BACKGROUND_PATH = 'berlin-background.png'
 
 
@@ -56,28 +55,13 @@ class NodesParser(object):
         self.fp.close()
 
 
-def fetch_and_convert_pbf():
+def fetch_and_parse_pbf():
+    print 'Fetching', PBF_URL
     pbf_file = 'brandenburg-latest.osm.pbf'
-
-    if os.path.exists(LOCAL_CACHE_PATH):
-        print LOCAL_CACHE_PATH, 'already exist, won\'t fetch/convert again'
-        return
-
-    if not os.path.exists(pbf_file):
-        print 'Fetching', PBF_URL
-        urllib.urlretrieve(PBF_URL, pbf_file)
-    else:
-        print 'Warning: Will use existing', pbf_file
-
-    print 'Converting', pbf_file, 'to osm file format'
-    check_call(['osmconvert', pbf_file, '--drop-author',
-                '-o=' + LOCAL_CACHE_PATH])
-
-
-def parse_data():
+    urllib.urlretrieve(PBF_URL, pbf_file)
     np = NodesParser()
     p = OSMParser(concurrency=2, nodes_callback=np.nodes)
-    p.parse(LOCAL_CACHE_PATH)
+    p.parse(pbf_file)
     np.close()
     print 'Dataset', DATASET_PATH, 'with', np.count, 'nodes parsed from OSM xml'
 
@@ -141,12 +125,9 @@ def main():
     parser = argparse.ArgumentParser(
         formatter_class=argparse.RawTextHelpFormatter)
     cmd_help = \
-        'fetch - download pbf file and covert it to osm\n' \
-        'parse - extract relevant nodes from osm and save them to csv\n' \
-        'vis - generate background image and plot node density from csv\n' \
-        'all - do all of the above [default]'
-    parser.add_argument('cmd', choices=['fetch', 'parse', 'vis', 'all'],
-                        default='all', nargs='?', help=cmd_help)
+        'prepare - download pbf and parse it\n' \
+        'vis - generate background image and plot node density from csv\n'
+    parser.add_argument('cmd', choices=['prepare', 'vis'], help=cmd_help)
     parser.add_argument('-H', '--host', help='PostGIS host')
     parser.add_argument('-U', '--user', help='PostGIS user')
     parser.add_argument('-W', '--passwd', help='PostGIS user\'s password')
@@ -154,11 +135,9 @@ def main():
                         help="Don't generate berlin-background.png if present")
     args = parser.parse_args()
 
-    if args.cmd in ('fetch', 'all'):
-        fetch_and_convert_pbf()
-    if args.cmd in ('parse', 'all'):
-        parse_data()
-    if args.cmd in ('vis', 'all'):
+    if args.cmd == 'prepare':
+        fetch_and_parse_pbf()
+    if args.cmd == 'vis':
         if not args.skip_bg or not os.path.exists(BERLIN_BACKGROUND_PATH):
             create_berlin_background(args.host, args.user, args.passwd)
         visualize_data_distribution()
