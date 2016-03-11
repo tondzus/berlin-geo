@@ -2,5 +2,7 @@
 *.pbf
 *.osm
 *.png
-*.swo
 *.csv
+*.swo
+*.swp
+symbols
