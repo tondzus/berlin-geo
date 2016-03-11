@@ -9,13 +9,16 @@ sys.setdefaultencoding('utf-8')
 import argparse
 
 import os
+import shutil
+
 import csv
 import urllib
 import codecs
 from operator import itemgetter
 from subprocess import check_call
-#import overpass
+from contextlib import contextmanager
 from imposm.parser import OSMParser
+from lxml import etree
 
 
 import pandas as pd
@@ -30,13 +33,14 @@ CLIPSIZE = itemgetter(1, 3)(BERLIN_BOUNDS), itemgetter(0, 2)(BERLIN_BOUNDS)
 LON_LAT_BOX = itemgetter(1, 3, 0, 2)(BERLIN_BOUNDS)
 LOCAL_CACHE_PATH = 'brandenburg-latest.osm'
 DATASET_PATH = 'restaurants.csv'
+BERLIN_BACKGROUND_PATH = 'berlin-background.png'
 
 
 class NodesParser(object):
     def __init__(self):
         self.fp = codecs.open(DATASET_PATH, 'wb', encoding='utf-8')
         self.writer = csv.writer(self.fp)
-        self.writer.writerow(['node_id', 'long', 'lat', 'name', 'street'])
+        self.writer.writerow(['node_id', 'lon', 'lat', 'name', 'street'])
         self.count = 0
 
     def nodes(self, nodes):
@@ -50,17 +54,6 @@ class NodesParser(object):
 
     def close(self):
         self.fp.close()
-
-
-#def fetch_data_overpass():
-#    api = overpass.API()
-#    print 'Fetching data from', api.endpoint
-#    berlin_box = '{:.4f}, {:.4f}, {:.4f}, {:.4f}'.format(*BERLIN_BOUNDS)
-#    query = 'node({});out;'.format(berlin_box)
-#    with codecs.open(LOCAL_CACHE_PATH, 'w', encoding='utf-8') as fp:
-#        response = api.Get(query)
-#        fp.write(response)
-#    print 'Data stored to', LOCAL_CACHE_PATH
 
 
 def fetch_and_convert_pbf():
@@ -89,55 +82,87 @@ def parse_data():
     print 'Dataset', DATASET_PATH, 'with', np.count, 'nodes parsed from OSM xml'
 
 
-def create_berlin_background():
-    path = 'berlin-background.png'
+@contextmanager
+def inject_db_info(host, user, passwd):
+    if all([host, user, passwd]):
+        with open('postgresql.xslt') as fp:
+            xslt_str = fp.read()
+            xslt_str = xslt_str.replace('HOST', host)
+            xslt_str = xslt_str.replace('USER', user)
+            xslt_str = xslt_str.replace('PASSWD', passwd)
+        xslt_xml_root = etree.XML(xslt_str)
+        xslt_transform = etree.XSLT(xslt_xml_root)
+        mapnik_style_old = etree.parse('mapnik-style.xml')
+        mapnik_style_new = xslt_transform(mapnik_style_old)
+        with open('tmp.xml', 'w') as fp:
+            fp.write(etree.tostring(mapnik_style_new))
+    else:
+        shutil.copyfile('mapnik-style.xml', 'tmp.xml')
+
+    yield
+
+    os.remove('tmp.xml')
+
+
+def create_berlin_background(host, user, passwd):
+    print 'Generating Berlin background map'
     bbox = map(lambda f: '{:.4f}'.format(f),
                itemgetter(1, 0, 3, 2)(BERLIN_BOUNDS))
-    check_call(['nik4.py', '-b'] + bbox +
-               ['-z', '12', 'mapnik-style.xml', path])
-    return path
+    with inject_db_info(host, user, passwd):
+        check_call(['nik4.py', '-b'] + bbox +
+                   ['-z', '13', 'tmp.xml', BERLIN_BACKGROUND_PATH])
+
+
+def load_data():
+    box = BERLIN_BOUNDS
+    data = pd.read_csv(DATASET_PATH)
+    lon_filter = (data['lon'] >= box[1]) & (data['lon'] <= box[3])
+    lan_filter = (data['lat'] >= box[0]) & (data['lat'] <= box[2])
+    return data[lon_filter & lan_filter]
 
 
 def visualize_data_distribution():
-    print 'Generating Berlin background map'
-    berlin = plt.imread(create_berlin_background())
-    aspect = float(berlin.shape[0]) / berlin.shape[1]
-
-    print 'Filtering data to bounding box selection'
-    box = BERLIN_BOUNDS
-    data = pd.read_csv(DATASET_PATH)
-    lon_filter = (data['long'] >= box[1]) & (data['long'] <= box[3])
-    lan_filter = (data['lat'] >= box[0]) & (data['lat'] <= box[2])
-    data = data[lon_filter & lan_filter]
+    print 'Loading necessery data'
+    berlin = plt.imread(BERLIN_BACKGROUND_PATH)
+    shape = map(float, berlin.shape)
+    aspect = shape[1] / shape[0]
+    data = load_data()
 
     print 'Ploting density graph over Berlin background'
-    plt.figure(figsize=(30, 30*aspect))
-    ax = sns.kdeplot(data['long'], data['lat'], clip=CLIPSIZE, aspect=1/aspect)
+    dpi = 96
+    plt.figure(figsize=(shape[1]/dpi, shape[0]/dpi), dpi=dpi)
+    ax = sns.kdeplot(data.lon, data.lat, clip=CLIPSIZE, aspect=aspect)
     ax.imshow(berlin, extent=LON_LAT_BOX, aspect=aspect)
-    plt.savefig('berlin-center.png')
+    ax.set_title('"Real" Berlin city center')
+    plt.savefig('berlin-center.png', bbox_inches='tight')
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    fetch_help = 'Fetch data from OSM. If not set {} must be present'.format(
-        LOCAL_CACHE_PATH)
-    parser.add_argument('--fetch', action='store_true', help=fetch_help)
-    parser.add_argument('--parse', action='store_true',
-                        help='Parse downloaded OSM data')
-    parser.add_argument('--vis', action='store_true',
-                        help='Visualize Berlin\'s centers')
-    parser.add_argument('--all', action='store_true',
-                        help='Perform all three steps: fetch, parse and vis')
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.RawTextHelpFormatter)
+    cmd_help = \
+        'fetch - download pbf file and covert it to osm\n' \
+        'parse - extract relevant nodes from osm and save them to csv\n' \
+        'vis - generate background image and plot node density from csv\n' \
+        'all - do all of the above [default]'
+    parser.add_argument('cmd', choices=['fetch', 'parse', 'vis', 'all'],
+                        default='all', nargs='?', help=cmd_help)
+    parser.add_argument('-H', '--host', help='PostGIS host')
+    parser.add_argument('-U', '--user', help='PostGIS user')
+    parser.add_argument('-W', '--passwd', help='PostGIS user\'s password')
+    parser.add_argument('--skip-bg', action='store_true',
+                        help="Don't generate berlin-background.png if present")
     args = parser.parse_args()
 
-    if args.fetch or args.all:
+    if args.cmd in ('fetch', 'all'):
         fetch_and_convert_pbf()
-    if args.parse or args.all:
+    if args.cmd in ('parse', 'all'):
         parse_data()
-    if args.vis or args.all:
+    if args.cmd in ('vis', 'all'):
+        if not args.skip_bg or not os.path.exists(BERLIN_BACKGROUND_PATH):
+            create_berlin_background(args.host, args.user, args.passwd)
         visualize_data_distribution()
 
 
 if __name__ == '__main__':
     main()
-
